@@ -1,0 +1,299 @@
+Below is a **clean, documentation-grade write-up** you can **directly paste into `README.md`** under a section like **“Phase 1 – Authentication & Identity (JWT)”**.
+
+This is written in a **professional engineering style** (not tutorial-ish), and it clearly explains **what was built, why it was built, the problems encountered, and how they were solved**.
+
+---
+
+# Phase 1 – Authentication & Identity (JWT)
+
+## Overview
+
+Phase 1 establishes **internal identity and authentication** for OmniBridge.
+The goal of this phase is to answer one fundamental question reliably:
+
+> **“Who is making this request, and can OmniBridge trust it?”**
+
+This phase intentionally does **not** include OAuth, external providers, or data connectors.
+It focuses solely on **stateless authentication using JWT**, forming the foundation for all future phases.
+
+---
+
+## Objectives
+
+By the end of Phase 1, OmniBridge should be able to:
+
+* Issue cryptographically signed identity tokens (JWT)
+* Verify incoming requests without maintaining server-side session state
+* Reject unauthenticated or malformed requests early
+* Provide verified user identity to protected endpoints
+* Enforce all authentication rules through automated tests
+
+---
+
+## Architecture Summary
+
+Phase 1 introduces three key layers:
+
+```
+API Routes        → HTTP interface (issue tokens, protected endpoints)
+Auth Dependency  → Authentication gatekeeper
+JWT Utilities    → Cryptographic verification
+```
+
+This separation ensures:
+
+* Clean responsibilities
+* No authentication logic inside business endpoints
+* Easy extensibility for future OAuth and connector layers
+
+---
+
+## Components Implemented
+
+### 1. JWT Configuration
+
+**Location**
+
+```
+omnibridge/auth/config.py
+```
+
+**Purpose**
+
+* Centralizes JWT settings
+* Ensures signing logic is consistent across the application
+
+**Key configuration**
+
+* Secret key (development-only)
+* Signing algorithm (HS256)
+
+---
+
+### 2. JWT Verification Utility
+
+**Location**
+
+```
+omnibridge/auth/jwt.py
+```
+
+**Responsibility**
+
+* Cryptographically verify incoming JWTs
+* Reject tampered, malformed, or expired tokens
+* Return trusted identity claims upon success
+
+**Design decision**
+
+* All cryptographic logic is isolated here
+* API routes never deal with raw JWT decoding
+
+---
+
+### 3. Authentication Dependency (Auth Guard)
+
+**Location**
+
+```
+omnibridge/auth/dependencies.py
+```
+
+**Purpose**
+
+* Acts as a gatekeeper for protected routes
+* Enforces authentication rules before endpoint logic executes
+
+**Authentication pipeline enforced**
+
+1. Authorization header must exist
+2. Header must use `Bearer` scheme
+3. Bearer token must be present and non-empty
+4. JWT must be cryptographically valid
+
+If any step fails, the request is rejected with `401 Unauthorized`.
+
+**Key outcome**
+
+* Endpoints receive **verified identity payloads**, not credentials
+
+---
+
+### 4. Token Issuance Endpoint
+
+**Location**
+
+```
+omnibridge/api/auth_routes.py
+```
+
+**Endpoint**
+
+```
+POST /auth/token
+```
+
+**Purpose**
+
+* Issue OmniBridge-signed JWTs
+* Establish internal identity for downstream services (e.g., Unified Search)
+
+**Important notes**
+
+* This is **not OAuth**
+* This is **not user login**
+* It is an internal identity bootstrap mechanism for OmniBridge
+
+---
+
+### 5. Protected Endpoint
+
+**Location**
+
+```
+omnibridge/api/protected_routes.py
+```
+
+**Endpoint**
+
+```
+GET /protected
+```
+
+**Behavior**
+
+* Requires valid JWT
+* Returns verified `user_id` from token payload
+
+**Key architectural change**
+
+* Endpoint logic no longer handles headers or tokens
+* Identity arrives already verified via dependency injection
+
+---
+
+## Testing Strategy
+
+Phase 1 was developed using **test-driven development (TDD)**.
+
+### Tests Implemented
+
+| Scenario                       | Expected Result             |
+| ------------------------------ | --------------------------- |
+| No Authorization header        | 401 Unauthorized            |
+| Malformed Authorization header | 401 Unauthorized            |
+| Empty Bearer token             | 401 Unauthorized            |
+| Invalid JWT                    | 401 Unauthorized            |
+| Valid JWT                      | 200 OK with correct user_id |
+
+**Outcome**
+
+* Authentication behavior is fully specified by tests
+* Security regressions are prevented automatically
+
+---
+
+## Problems Encountered & Solutions
+
+### Problem 1: Import errors during testing
+
+**Cause**
+
+* Application code existed outside the installed Python package
+
+**Solution**
+
+* Consolidated all app code under the `omnibridge/` package
+* Added explicit `__init__.py` files
+* Installed package in editable mode
+
+---
+
+### Problem 2: Authentication logic leaking into endpoints
+
+**Cause**
+
+* Initial implementations handled auth checks directly in routes
+
+**Solution**
+
+* Introduced FastAPI dependencies as authentication gates
+* Ensured endpoints only receive verified identity data
+
+---
+
+### Problem 3: Confusion around JWT trust model
+
+**Cause**
+
+* JWT verification introduces cryptographic trust, not simple validation
+
+**Solution**
+
+* Clarified mental model:
+
+  * JWT = signed identity message
+  * Trust comes from secret key ownership
+  * Integrity, not secrecy, is the guarantee
+
+---
+
+### Problem 4: Handling malformed and empty tokens
+
+**Cause**
+
+* Initial auth checks only verified header presence
+
+**Solution**
+
+* Implemented layered authentication pipeline:
+
+  * Scheme validation
+  * Token extraction
+  * Non-empty enforcement
+  * Cryptographic verification
+
+---
+
+## Security Guarantees Achieved
+
+Phase 1 ensures that:
+
+* OmniBridge never trusts client input blindly
+* Identity cannot be forged without the signing key
+* All authentication is stateless and scalable
+* Protected routes only execute with verified identity
+
+---
+
+## Phase 1 Completion Criteria
+
+Phase 1 is considered complete when:
+
+* JWTs can be issued and verified
+* Authentication is enforced consistently via dependencies
+* Endpoints receive trusted identity data
+* All authentication rules are covered by tests
+* No OAuth or external service logic is mixed in
+
+✅ **All criteria met**
+
+---
+
+## What Comes Next
+
+Phase 2 will build on this identity layer to answer a new question:
+
+> **“Which external accounts and OAuth tokens belong to this verified user?”**
+
+Because Phase 1 cleanly separates identity from permissions, Phase 2 can be implemented without modifying any Phase 1 logic.
+
+---
+
+If you want, next I can:
+
+* Review this README section for resume/interview framing
+* Convert it into **architecture documentation**
+* Help you write a **Phase 1 design justification** (great for interviews)
+
+Just tell me.

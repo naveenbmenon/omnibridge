@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+pytest
+pytest-mock
+httpx
+python-jose[cryptography]
+google-api-python-client
+google-auth

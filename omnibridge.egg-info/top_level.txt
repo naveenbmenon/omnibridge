@@ -1,0 +1,7 @@
+api
+auth
+connectors
+core
+omnibridge
+tests
+venv

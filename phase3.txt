@@ -1,0 +1,321 @@
+Absolutely. This phase **deserves proper documentation**, because Phase 3 is where OmniBridge stopped being “a backend exercise” and became a **real integration platform**.
+
+Below is a **documentation-style write-up** you can directly use in your `README.md` or `/docs/phase-3.md`.
+
+I’ll structure it the same way professional engineering teams do.
+
+---
+
+# 📦 OmniBridge – Phase 3 Documentation
+
+## **Connectors & Real Gmail Integration**
+
+---
+
+## 🎯 Phase Objective
+
+The goal of **Phase 3** was to extend OmniBridge from an authentication + account management system into a **real data access platform**, capable of:
+
+* Connecting to third-party services via OAuth
+* Fetching **real user data**
+* Normalizing external APIs into a unified internal format
+* Serving that data through OmniBridge endpoints
+
+This phase focused on implementing the **Connector layer**, starting with **Gmail**.
+
+---
+
+## 🧠 Architectural Context
+
+By the start of Phase 3, OmniBridge already had:
+
+* JWT-based authentication (Phase 1)
+* Secure account linking and token storage (Phase 2)
+
+Phase 3 introduced the **final missing layer**:
+
+```
+Authenticated User
+        ↓
+   OmniBridge API
+        ↓
+   Connector Layer
+        ↓
+ External Provider APIs (Gmail)
+```
+
+---
+
+## 🧩 Key Components Introduced
+
+### 1️⃣ Connector Abstraction
+
+A connector is responsible for:
+
+* Talking to a specific external provider
+* Handling provider-specific quirks
+* Returning **normalized data**
+
+#### Design principle:
+
+> OmniBridge core should never care *how* Gmail works.
+
+This separation allows:
+
+* Easy addition of new providers (Drive, Notion, Slack)
+* Isolation of third-party API failures
+* Clean testing and mocking
+
+---
+
+### 2️⃣ Gmail Connector (`GmailConnector`)
+
+The Gmail connector was implemented with the following responsibilities:
+
+* Retrieve stored OAuth tokens from the token store
+* Authenticate with the Gmail API
+* Fetch recent messages
+* Normalize Gmail responses into OmniBridge format
+
+#### Normalized message schema:
+
+```json
+{
+  "id": "...",
+  "source": "gmail",
+  "from": "...",
+  "to": ["..."],
+  "subject": "...",
+  "snippet": "...",
+  "timestamp": "ISO-8601"
+}
+```
+
+This ensures consistency across providers.
+
+---
+
+### 3️⃣ Sources API
+
+Phase 3 introduced the **Sources API**, exposing provider-specific data:
+
+```
+GET /sources/gmail/messages
+```
+
+This endpoint:
+
+* Requires OmniBridge JWT
+* Fetches data via the Gmail connector
+* Returns normalized results
+
+The Sources API acts as the **bridge** between OmniBridge and future consumers like Unified Search.
+
+---
+
+## 🔐 Authentication & Token Flow (Phase 3)
+
+### Tokens involved:
+
+| Token               | Purpose                       |
+| ------------------- | ----------------------------- |
+| JWT                 | Identifies user to OmniBridge |
+| Gmail access token  | Calls Gmail API               |
+| Gmail refresh token | Renews access token           |
+
+### Runtime flow:
+
+1. Client authenticates → gets JWT
+2. Gmail account is linked (tokens stored server-side)
+3. Client calls `/sources/gmail/messages`
+4. OmniBridge:
+
+   * Validates JWT
+   * Retrieves Gmail tokens
+   * Calls Gmail API
+   * Returns normalized data
+
+At no point are Gmail tokens exposed to the client.
+
+---
+
+## ⚠️ Major Issues Encountered (and How They Were Solved)
+
+Phase 3 was **not smooth**, and that’s exactly why it’s valuable.
+
+---
+
+### ❌ Issue 1: Gmail API returning empty results
+
+**Symptom**
+
+* `/search` returned `200 OK` but an empty array
+* No errors, no crashes
+
+**Root cause**
+
+* Gmail UI search ≠ Gmail API search
+* Gmail API search is strict and unreliable for generalized queries
+
+**Solution**
+
+* Switched to fetching **recent messages** instead of relying on Gmail search
+* Deferred content-based filtering to higher layers
+
+**Engineering lesson**
+
+> Never assume UI behavior matches API behavior.
+
+---
+
+### ❌ Issue 2: Gmail connector code not executing
+
+**Symptom**
+
+* No debug logs from Gmail API
+* Empty responses despite valid setup
+
+**Root cause**
+
+* Gmail connector was not wired into the correct endpoint
+* `/search` and `/sources/gmail/messages` were separate execution paths
+
+**Solution**
+
+* Identified correct endpoint (`/sources/gmail/messages`)
+* Tested connector directly before wiring aggregation
+
+**Engineering lesson**
+
+> Code can be correct but never executed — always verify execution paths.
+
+---
+
+### ❌ Issue 3: “Google account not linked” despite successful linking
+
+**Symptom**
+
+```json
+{
+  "detail": "Google account not linked"
+}
+```
+
+**Root cause**
+
+* Multiple `InMemoryTokenStore()` instances existed
+* Account linking wrote to one instance
+* Gmail connector read from another
+
+**Solution**
+
+* Introduced a **single shared token store**
+* Centralized it in `accounts/dependencies.py`
+* Injected the same instance everywhere
+
+**Engineering lesson**
+
+> In-memory state only works if the same instance is shared.
+
+This is a real-world backend pitfall.
+
+---
+
+### ❌ Issue 4: “Invalid token” errors after server restarts
+
+**Symptom**
+
+```json
+{ "detail": "Invalid token" }
+```
+
+**Root cause**
+
+* JWTs are memory-bound
+* Server restarts invalidate old tokens
+
+**Solution**
+
+* Re-issued JWTs after restarts
+* Re-linked Gmail when necessary
+
+**Engineering lesson**
+
+> Token lifecycle management is unavoidable in real systems.
+
+---
+
+## 🧪 Testing Strategy in Phase 3
+
+### Unit Tests:
+
+* Gmail connector behavior (mocked)
+* Token store correctness
+* Authentication enforcement
+
+### Manual Integration Tests:
+
+* OAuth token generation
+* Account linking
+* Real Gmail API calls
+* End-to-end `/sources/gmail/messages` validation
+
+This hybrid approach ensured:
+
+* Fast feedback during development
+* Confidence in real-world behavior
+
+---
+
+## ✅ Phase 3 Completion Criteria
+
+Phase 3 was considered **complete** when:
+
+* Gmail OAuth integration worked with real user data
+* Emails were fetched and normalized correctly
+* Tokens were securely stored and reused
+* Sources API returned real Gmail messages
+* No client-side token exposure existed
+
+All criteria were met.
+
+---
+
+## 📌 What Phase 3 Deliberately Did NOT Do
+
+* ❌ Full Gmail history indexing
+* ❌ Background sync jobs
+* ❌ Automatic token refresh
+* ❌ Search aggregation across providers
+
+These are **intentional deferrals to Phase 4 / v2**.
+
+---
+
+## 🧠 Key Takeaways from Phase 3
+
+* OAuth integrations are mostly about **edge cases**
+* In-memory state is dangerous without discipline
+* Third-party APIs behave differently from their UIs
+* Debugging execution paths is a critical backend skill
+* Building connectors first simplifies future expansion
+
+---
+
+## 🚀 Result
+
+At the end of Phase 3, OmniBridge evolved into:
+
+> **A production-style API gateway capable of securely connecting to external services and exposing normalized, authenticated data.**
+
+This phase validates OmniBridge as a **real platform**, not just a project.
+
+---
+
+If you want, next we can:
+
+* Clean this into a polished README section
+* Convert it into interview-ready talking points
+* Start designing **OmniBridge v2** properly (OAuth automation, refresh, indexing)
+
+Just tell me how you want to proceed.
