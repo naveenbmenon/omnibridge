@@ -1,110 +1,55 @@
+# OmniBridge
 
-# OmniBridge v1
+A pluggable API gateway that centralizes OAuth-based access to third-party services behind a secure, unified backend interface.
 
-**A Pluggable API Gateway for Secure OAuth-Based Access to Third-Party Services**
+## Problem
 
----
+Every third-party service has its own OAuth flow, API design, and response format. Applications that integrate multiple providers end up duplicating token management, error handling, and normalization logic across their codebase.
 
-## 🚀 Overview
+## Solution
 
-**OmniBridge** is a backend platform that acts as a **secure, unified gateway** between applications and third-party services such as Gmail.
+OmniBridge acts as a single backend gateway — handling OAuth, securely storing provider tokens, and exposing a normalized API that applications can consume without ever touching provider-specific logic directly.
 
-Instead of every application individually handling OAuth, tokens, rate limits, and provider-specific APIs, OmniBridge centralizes this complexity behind a **clean, normalized API**.
-
-OmniBridge v1 focuses on **correct architecture, security, and real-world integration**, rather than UI or automation polish.
-
----
-
-## 🎯 Goals of OmniBridge v1
-
-* Centralize OAuth integrations
-* Securely store and manage provider tokens
-* Expose a unified API for external services
-* Normalize provider-specific data
-* Serve as a backend platform for future applications (e.g., Unified Search)
-
----
-
-## 🧠 Core Concepts
-
-### Why OmniBridge?
-
-Every third-party service has:
-
-* Different OAuth flows
-* Different APIs
-* Different response formats
-
-OmniBridge abstracts this complexity into a **single platform**, allowing applications to interact with multiple services using a consistent interface.
-
----
-
-## 🏗️ High-Level Architecture
+## Architecture
 
 ```
-Client / App (Postman, Future UI)
+Client / Application
         ↓
 JWT Authentication (OmniBridge)
         ↓
 OmniBridge API Layer
         ↓
-Connector Layer (Gmail)
+Connector Layer (pluggable per provider)
         ↓
-External Provider APIs
+External Provider APIs (Gmail, ...)
 ```
 
-Key principle:
+**Core principle:** Applications never communicate directly with third-party APIs. OmniBridge mediates all provider interactions.
 
-> **Applications never talk directly to third-party APIs. OmniBridge does.**
+## Authentication Model
 
----
+OmniBridge uses two distinct token layers:
 
-## 🔐 Authentication & Authorization
+| Token | Purpose |
+|---|---|
+| JWT | Identifies the user within OmniBridge |
+| OAuth Access Token | Used to call provider APIs on behalf of the user |
+| OAuth Refresh Token | Renews expired access tokens server-side |
 
-### JWT (OmniBridge Authentication)
+- JWTs are stateless and validated on every request
+- OAuth tokens are stored server-side and never exposed to clients
 
-* OmniBridge issues JWTs to identify users
-* JWTs are required for all protected endpoints
-* JWTs are stateless and validated on every request
+## Connector Architecture
 
-### OAuth (Provider Authorization)
+OmniBridge uses a pluggable connector system. Each connector:
 
-* OAuth access & refresh tokens are obtained from providers (e.g., Google)
-* Tokens are **stored securely server-side**
-* Tokens are never exposed to clients
+- Handles authentication with one specific provider
+- Converts provider responses into a normalized format
+- Is fully isolated from OmniBridge core logic
 
----
+New providers can be added by implementing the base connector interface without modifying existing code.
 
-## 🔑 Token Types Used
-
-| Token               | Purpose                           |
-| ------------------- | --------------------------------- |
-| JWT                 | Identifies user within OmniBridge |
-| OAuth Access Token  | Calls provider APIs               |
-| OAuth Refresh Token | Renews expired access tokens      |
-
----
-
-## 🧩 Connector Architecture
-
-OmniBridge uses a **pluggable connector system**.
-
-Each connector:
-
-* Knows how to talk to one provider
-* Converts provider responses into a normalized format
-* Is isolated from OmniBridge core logic
-
-### Example: Gmail Connector
-
-Responsibilities:
-
-* Authenticate with Gmail API
-* Fetch recent emails
-* Normalize Gmail responses
-
-Normalized email structure:
-
+**Normalized email response (Gmail Connector):**
 ```json
 {
   "id": "string",
@@ -117,163 +62,78 @@ Normalized email structure:
 }
 ```
 
----
-
-## 📁 Project Structure
+## Project Structure
 
 ```
 omnibridge_v1/
 ├── omnibridge/
 │   ├── main.py                 # FastAPI app entry point
-│   │
 │   ├── api/
 │   │   ├── auth_routes.py      # JWT issuing endpoints
 │   │   ├── accounts.py         # Account linking & listing
-│   │   ├── sources.py          # Provider data access endpoints
-│   │
+│   │   └── sources.py          # Provider data access endpoints
 │   ├── auth/
 │   │   ├── jwt.py              # JWT creation & verification
 │   │   └── dependencies.py     # Auth dependency injection
-│   │
 │   ├── accounts/
 │   │   ├── models.py           # Account data model
 │   │   ├── store.py            # Token store abstraction
 │   │   └── dependencies.py     # Shared token store instance
-│   │
-│   ├── connectors/
-│   │   ├── base.py             # Connector interface
-│   │   └── gmail.py            # Gmail connector implementation
-│
+│   └── connectors/
+│       ├── base.py             # Connector interface
+│       └── gmail.py            # Gmail connector implementation
 ├── tests/
 │   ├── test_auth.py
 │   ├── test_health.py
 │   ├── test_token_store.py
 │   ├── test_account_linking.py
 │   └── test_gmail_connector.py
-│
 ├── requirements.txt
-├── pyproject.toml
-└── README.md
+└── pyproject.toml
 ```
 
----
+## Testing Strategy
 
-## 🧪 Testing Strategy
+**Automated tests cover:**
+- JWT creation and validation
+- Authorization header enforcement
+- Token store read/write behavior
+- Account linking logic
+- Connector interfaces (mocked)
 
-### Automated Tests
+**Manual integration tests cover:**
+- OAuth token generation flow
+- Real Gmail API calls
+- End-to-end `/sources/gmail/messages` flow
 
-* JWT validation
-* Authorization header enforcement
-* Token store behavior
-* Account linking logic
-* Connector interfaces (mocked)
+## Key Engineering Decisions
 
-### Manual Integration Tests
+- **Pluggable connector system** — new providers are added by implementing a base interface, with zero changes to core logic
+- **Single shared token store via dependency injection** — eliminates the multiple-instance bug that caused "account not linked" errors despite successful linking
+- **Server-side token storage** — OAuth tokens never leave the backend, keeping client-facing auth limited to short-lived JWTs
+- **Strict v1 scope** — features like automatic token refresh and background sync are intentionally deferred to keep the core architecture clean and auditable
 
-* OAuth token generation
-* Real Gmail API calls
-* End-to-end `/sources/gmail/messages` flow
+## v1 Scope
 
-This hybrid approach ensures:
+**Included:**
+- JWT-based authentication
+- OAuth account linking
+- Secure server-side token storage
+- Gmail connector with real API integration
+- Normalized provider response format
+- Source-specific API endpoints
 
-* Fast feedback during development
-* Confidence in real-world behavior
+**Deferred to v2:**
+- OAuth redirect & callback automation
+- Automatic token refresh
+- Background sync workers
+- Additional connectors (Drive, Notion, Slack)
 
----
+## Running Locally
 
-## ⚠️ Key Challenges Encountered (and Solutions)
-
-### 1. Gmail API returning empty results
-
-**Cause:** Gmail UI search ≠ Gmail API search
-**Solution:** Fetch recent messages in v1 for reliability
-
----
-
-### 2. Connector code not executing
-
-**Cause:** Incorrect endpoint path used during testing
-**Solution:** Isolated `/sources/gmail/messages` endpoint and tested directly
-
----
-
-### 3. “Google account not linked” despite successful linking
-
-**Cause:** Multiple in-memory token store instances
-**Solution:** Introduced a **single shared token store** via dependency injection
-
----
-
-### 4. “Invalid token” errors after restart
-
-**Cause:** JWTs invalidated on server restart
-**Solution:** Re-issued JWTs and clarified token lifecycle
-
----
-
-## ✅ Scope of OmniBridge v1
-
-### Included
-
-* JWT-based authentication
-* OAuth account linking
-* Secure token storage
-* Gmail connector with real API integration
-* Normalized provider data
-* Source-specific API endpoints
-
-### Explicitly Excluded
-
-* OAuth redirect automation
-* Automatic token refresh
-* Background sync jobs
-* Full-text search indexing
-* Multi-provider aggregation
-
-These are deferred to v2.
-
----
-
-## 🔮 Planned Future Work (v2+)
-
-* OAuth redirect & callback flow
-* Automatic token refresh
-* Provider pagination & indexing
-* Background sync workers
-* Additional connectors (Drive, Notion, Slack)
-* Unified `/search` aggregation endpoint
-
----
-
-## 🧩 Integration with Other Projects
-
-OmniBridge is designed to act as a **platform service**.
-
-Example usage:
-
-* Unified Search backend consumes OmniBridge APIs
-* Future apps reuse the same OAuth integrations
-* No duplication of provider logic
-
----
-
-## 🏁 Project Status
-
-**OmniBridge v1 is complete and stable.**
-
-The project is intentionally paused at this stage to:
-
-* Preserve architectural clarity
-* Avoid over-polishing
-* Allow focus on additional portfolio projects
-
-Further development will resume as OmniBridge v2.
-
----
-
-## 📌 Key Takeaway
-
-> OmniBridge v1 demonstrates real-world backend engineering: secure auth, OAuth integration, connector-based architecture, and production-style problem solving.
-
----
-
+```bash
+pip install -r requirements.txt
+uvicorn omnibridge.main:app --reload
+# API: http://127.0.0.1:8000
+# Docs: http://127.0.0.1:8000/docs
+```
