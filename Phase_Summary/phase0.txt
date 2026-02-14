@@ -1,0 +1,223 @@
+================================================================================
+OMNIBRIDGE
+Internal API Gateway — Technical Documentation
+================================================================================
+
+OVERVIEW
+--------
+OmniBridge is an internal API gateway that centralizes OAuth authentication,
+third-party API integrations, and data normalization behind a unified interface.
+Consumer applications interact exclusively with OmniBridge, never with external
+providers directly.
+
+
+--------------------------------------------------------------------------------
+MOTIVATION
+--------------------------------------------------------------------------------
+Modern applications routinely integrate with multiple external services (Gmail,
+Google Drive, Notion, Slack, GitHub, etc.), each with distinct OAuth flows,
+API contracts, data formats, and failure modes.
+
+OmniBridge addresses this by:
+
+  - Owning the OAuth and token lifecycle for all external providers
+  - Abstracting provider-specific APIs through a connector layer
+  - Exposing a single, stable internal API to all consumer applications
+
+
+--------------------------------------------------------------------------------
+ARCHITECTURE
+--------------------------------------------------------------------------------
+
+  Consumer Applications  (Dashboards, Automations, Internal Services)
+           |
+           v
+       OmniBridge
+           |
+           v
+  External Providers     (Gmail, Google Drive, Notion, ...)
+
+Consumer applications have no direct dependency on any external provider API.
+
+
+--------------------------------------------------------------------------------
+PROJECT STRUCTURE
+--------------------------------------------------------------------------------
+
+  omnibridge_v1/
+  |-- omnibridge/          Application package
+  |   |-- __init__.py
+  |   `-- main.py
+  |-- tests/               Automated test suite
+  |   `-- test_health.py
+  |-- requirements.txt     Dependency contract
+  |-- pyproject.toml       Package declaration
+  `-- README.txt
+
+
+--------------------------------------------------------------------------------
+PHASE 0 — FOUNDATION & ENVIRONMENT SETUP
+--------------------------------------------------------------------------------
+
+OBJECTIVES
+
+Phase 0 establishes a clean, testable, and reproducible project foundation
+prior to introducing any domain logic (OAuth, token management, connectors).
+
+Specific goals:
+
+  - Establish an isolated development environment
+  - Define and pin the dependency contract
+  - Verify the FastAPI application lifecycle
+  - Introduce automated testing from the outset
+  - Resolve Python packaging and import resolution early
+
+
+WHAT WAS IMPLEMENTED
+
+1. Virtual Environment
+
+   A Python virtual environment was created using venv. All dependencies are
+   installed locally to the project, preventing conflicts with other Python
+   projects on the same machine.
+
+   Every production backend service must be fully reproducible across
+   development machines, CI pipelines, and deployment targets. The virtual
+   environment is the first step toward that guarantee.
+
+2. Dependency Management (requirements.txt)
+
+   A minimal, explicit dependency set was defined:
+
+     fastapi    — API framework
+     uvicorn    — ASGI server
+     pytest     — Test runner
+     httpx      — HTTP client (used by the test suite)
+
+   requirements.txt acts as a dependency contract: any contributor can
+   recreate the exact environment from this file alone.
+
+3. Application Entry Point (main.py)
+
+   A minimal FastAPI application was implemented, exposing a single
+   health-check endpoint:
+
+     GET /health
+     Response: {"status": "ok"}
+
+   The /health endpoint serves three purposes:
+     - Confirms the service process is alive and reachable
+     - Provides a stable baseline for the automated test suite
+     - Satisfies the convention expected by monitoring systems and
+       container orchestrators (Kubernetes liveness probes, etc.)
+
+4. Automated Testing (pytest)
+
+   The first behavioral test was written against the health endpoint:
+
+     def test_health_check():
+         response = client.get("/health")
+         assert response.status_code == 200
+         assert response.json() == {"status": "ok"}
+
+   Tests verify observable behavior, not implementation details. This
+   distinction allows safe refactoring and establishes a test-first
+   development baseline from the first line of production code.
+
+
+--------------------------------------------------------------------------------
+ISSUE ENCOUNTERED IN PHASE 0
+--------------------------------------------------------------------------------
+
+PROBLEM
+
+  ModuleNotFoundError: No module named 'omnibridge'
+
+Despite the correct folder structure and the presence of __init__.py, pytest
+could not import the application package.
+
+
+ROOT CAUSE
+
+Python does not make code importable simply because it exists on disk.
+A directory becomes an importable package under two independent conditions:
+
+  1. Package identity — the directory contains __init__.py, which designates
+     it as a package.
+
+  2. Package discoverability — Python's import system knows where to search
+     for the package (i.e., the package's parent directory is on sys.path).
+
+__init__.py satisfies condition 1. It does not satisfy condition 2.
+Without condition 2, the import system has no knowledge of the package's
+location regardless of the directory structure.
+
+
+APPROACHES REJECTED
+
+The following approaches were considered and deliberately avoided:
+
+  - Manually modifying sys.path inside test files
+  - Passing --rootdir or --import-mode flags to pytest
+  - Using relative imports
+
+These approaches are environment-specific and fragile. They produce
+inconsistent behavior across local development, CI runners, and deployment,
+and do not reflect how Python packages are intended to be distributed.
+
+
+SOLUTION APPLIED
+
+The project was declared as an installable package via pyproject.toml and
+installed in editable mode:
+
+  pip install -e .
+
+Editable installation registers the project root with Python's import
+system without copying files. The package becomes importable from any
+context — test runner, REPL, CI pipeline, production process — without
+any path manipulation.
+
+
+SUMMARY
+
+  __init__.py      Declares what the directory is (a package)
+  pip install -e . Declares where Python should find it (discoverability)
+
+Both are required. The absence of either produces an ImportError.
+This distinction is fundamental to professional Python project structure.
+
+
+--------------------------------------------------------------------------------
+DEVELOPMENT PRINCIPLES
+--------------------------------------------------------------------------------
+
+  - Test behavior, not implementation
+  - Explicit structure over implicit convention
+  - Resolve architectural issues at the foundation, not retroactively
+  - Dependencies and packaging must be reproducible across all environments
+
+
+--------------------------------------------------------------------------------
+GETTING STARTED
+--------------------------------------------------------------------------------
+
+  # Create and activate virtual environment
+  python -m venv venv
+  venv\Scripts\activate          # Windows
+  source venv/bin/activate       # macOS / Linux
+
+  # Install dependencies
+  pip install -r requirements.txt
+
+  # Install project as editable package
+  pip install -e .
+
+  # Start development server
+  uvicorn omnibridge.main:app --reload
+
+  # Run test suite
+  pytest
+
+
+================================================================================

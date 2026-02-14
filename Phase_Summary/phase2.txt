@@ -1,0 +1,234 @@
+================================================================================
+OMNIBRIDGE
+Internal API Gateway — Technical Documentation
+Phase 2 — External Account Linking & OAuth Token Storage
+================================================================================
+
+
+--------------------------------------------------------------------------------
+OVERVIEW
+--------------------------------------------------------------------------------
+
+Phase 2 extends OmniBridge from identity verification (Phase 1) to permission
+management. The central question this phase addresses is:
+
+  "Which external services has a verified user authorized OmniBridge to access,
+  and how are those permissions stored safely?"
+
+This phase deliberately avoids real OAuth redirects and live external API calls.
+It focuses on secure token ownership, user isolation, and storage design — the
+foundation on which all future provider integrations depend.
+
+
+--------------------------------------------------------------------------------
+OBJECTIVES
+--------------------------------------------------------------------------------
+
+By the end of Phase 2, OmniBridge must be able to:
+
+  - Store OAuth access permissions per user
+  - Enforce strict user isolation for all stored tokens
+  - Link external accounts only for authenticated users
+  - Expose account metadata without leaking credential secrets
+  - Provide a stable storage abstraction replaceable by a persistent backend
+
+
+--------------------------------------------------------------------------------
+ARCHITECTURAL PRINCIPLES
+--------------------------------------------------------------------------------
+
+Phase 2 is governed by four structural rules:
+
+  1. Identity and permissions are separate concerns
+  2. OAuth tokens never leave OmniBridge
+  3. All token access is scoped by verified user identity
+  4. Storage implementation is abstracted behind a clean interface
+
+These rules ensure the system remains secure, testable, and extensible across
+future phases without requiring changes to earlier layers.
+
+
+--------------------------------------------------------------------------------
+LAYER DIAGRAM
+--------------------------------------------------------------------------------
+
+  JWT (Phase 1)
+       |
+       v
+  Verified user_id
+       |
+       v
+  Account Linking API
+       |
+       v
+  Token Store  (ownership enforced)
+       |
+       v
+  OAuth Tokens  (internal only, never returned to clients)
+
+OmniBridge functions as a permission vault. It does not act as an OAuth client
+or expose credentials to any consuming service.
+
+
+--------------------------------------------------------------------------------
+COMPONENTS IMPLEMENTED
+--------------------------------------------------------------------------------
+
+1. Account Model  (omnibridge/accounts/models.py)
+
+   The Account model represents a single external account linked to a user.
+
+   Fields captured:
+
+     user_id          — ownership, sourced from verified JWT only
+     provider         — external service identity (google, notion, etc.)
+     provider_account — provider-specific account identifier
+     access_token     — OAuth credential (internal only)
+     scopes           — granted permission scopes
+     expires_at       — token expiry metadata
+
+   Design characteristics:
+
+     - Pure data container with no embedded logic
+     - Provider-agnostic structure supports any OAuth service
+     - Explicit user_id field enforces ownership at the model level
+     - Structured for direct persistence into a relational or document store
+
+
+2. Token Store  (omnibridge/accounts/store.py)
+
+   Implementation: InMemoryTokenStore
+
+   Responsibilities:
+
+     - Store OAuth tokens keyed by user and provider
+     - Enforce strict user isolation at the storage boundary
+     - Provide a consistent interface for all token operations
+
+   Internal structure:
+
+     {
+       user_id: {
+         provider: Account
+       }
+     }
+
+   This nesting guarantees:
+
+     - Tokens cannot be accessed without a valid user context
+     - Providers are isolated cleanly per user
+     - Cross-user access is structurally impossible
+
+   The storage interface is designed for backend replacement. PostgreSQL,
+   Redis, or an encrypted vault can be substituted without modifying any
+   API or business logic above this layer.
+
+
+3. Account Linking Endpoint  (omnibridge/accounts/routes.py)
+
+   Endpoint: POST /accounts/link
+
+   Allows a verified user to link an external account by submitting a
+   mocked OAuth result representing a completed authorization flow.
+
+   Behavior:
+
+     - Requires valid JWT (enforced via Phase 1 dependency)
+     - Extracts user_id exclusively from the verified JWT payload
+     - Accepts OAuth-like token data as the request body
+     - Stores permissions through the token store
+     - Returns confirmation metadata only
+
+   Security constraints:
+
+     - user_id is never accepted from the request body
+     - OAuth tokens are never included in any response
+     - All storage flows through the token store interface
+
+
+4. List Linked Accounts Endpoint  (omnibridge/accounts/routes.py)
+
+   Endpoint: GET /accounts
+
+   Returns a list of external accounts linked by the authenticated user.
+
+   Response characteristics:
+
+     - Metadata only: provider, scopes, expiry timestamps
+     - Access tokens and refresh tokens are never included
+     - Results are scoped strictly to the requesting user's identity
+
+
+--------------------------------------------------------------------------------
+TESTING STRATEGY
+--------------------------------------------------------------------------------
+
+Phase 2 was built test-first. Tests define ownership and security rules before
+implementation; they are not written to confirm code that already exists.
+
+
+Token Store Tests  (tests/test_token_store.py)
+
+   These tests define the core security contract of the storage layer.
+
+   Scenarios covered:
+
+     - Store and retrieve an account successfully
+     - Return None for a non-existent account
+     - Reject cross-user token access (user A cannot read user B's tokens)
+     - Support multiple providers per user without interference
+     - List all accounts belonging to a user
+
+   Central guarantee:
+
+     OAuth tokens are always scoped by (user_id, provider).
+     No operation on the store can return tokens belonging to another user.
+
+
+Account Linking Tests  (tests/test_account_linking.py)
+
+   These tests validate the public API surface and its security boundaries.
+
+   Scenarios covered:
+
+     - Link an account successfully with valid JWT authentication
+     - Reject unauthenticated linking attempts with 401 Unauthorized
+     - Confirm OAuth tokens are absent from all API responses
+
+   Central guarantee:
+
+     External permissions can only be stored by a verified user.
+     Credential secrets never leave OmniBridge through any API response.
+
+
+--------------------------------------------------------------------------------
+ISSUES ENCOUNTERED IN PHASE 2
+--------------------------------------------------------------------------------
+
+PROBLEM: Missing package initialization files
+
+   Cause:    New submodules under omnibridge/accounts/ were created without
+             __init__.py files, causing pytest to fail to discover and import
+             the test targets.
+
+   Solution: Enforced a strict package layout across all submodules. Every
+             directory under omnibridge/ includes an explicit __init__.py.
+             This is now treated as a structural invariant of the project.
+
+Note: Phase 2 encountered no security or logic regressions. This is a direct
+result of designing the data model and ownership rules before writing any
+implementation code, and locking those rules in tests before the code existed.
+
+
+--------------------------------------------------------------------------------
+SECURITY GUARANTEES ESTABLISHED
+--------------------------------------------------------------------------------
+
+  - OAuth tokens never leave the OmniBridge backend
+  - Every stored token is owned by exactly one verified user
+  - Authentication and permission logic are fully decoupled
+  - External accounts cannot be linked or accessed without a valid JWT
+  - Storage implementation is isolated and replaceable without logic changes
+
+
+================================================================================

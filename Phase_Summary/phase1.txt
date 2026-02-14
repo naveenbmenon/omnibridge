@@ -1,0 +1,140 @@
+--------------------------------------------------------------------------------
+PHASE 1 — AUTHENTICATION & IDENTITY (JWT)
+--------------------------------------------------------------------------------
+
+OBJECTIVES
+
+Phase 1 establishes internal identity and authentication for OmniBridge.
+The central question this phase addresses is:
+
+  "Who is making this request, and can OmniBridge trust it?"
+
+This phase deliberately excludes OAuth, external providers, and data
+connectors. It focuses solely on stateless authentication using JWT, forming
+the identity foundation on which all subsequent phases depend.
+
+Specific goals:
+
+  - Issue cryptographically signed identity tokens (JWT)
+  - Verify incoming requests without server-side session state
+  - Reject unauthenticated or malformed requests before they reach endpoints
+  - Provide verified identity payloads to protected endpoints
+  - Cover all authentication rules with automated tests
+
+
+WHAT WAS IMPLEMENTED
+
+1. JWT Configuration (omnibridge/auth/config.py)
+
+   Centralizes JWT settings — secret key and signing algorithm (HS256) —
+   ensuring signing logic is consistent across the entire application.
+   No component derives its own JWT configuration independently.
+
+2. JWT Verification Utility (omnibridge/auth/jwt.py)
+
+   Performs cryptographic verification of incoming tokens. Responsibilities:
+
+     - Reject tampered, malformed, or expired tokens
+     - Return trusted identity claims on success
+
+   All cryptographic logic is isolated in this module. API routes never
+   interact with raw JWT decoding directly.
+
+3. Authentication Dependency / Auth Guard (omnibridge/auth/dependencies.py)
+
+   Acts as a gatekeeper injected into protected routes via FastAPI's
+   dependency injection system. The authentication pipeline enforced:
+
+     Step 1 — Authorization header must be present
+     Step 2 — Header must use the Bearer scheme
+     Step 3 — Bearer token must be non-empty
+     Step 4 — JWT must pass cryptographic verification
+
+   If any step fails, the request is rejected with 401 Unauthorized before
+   endpoint logic executes. Endpoints receive verified identity payloads,
+   not raw credentials.
+
+4. Token Issuance Endpoint (omnibridge/api/auth_routes.py)
+
+   Endpoint: POST /auth/token
+
+   Issues OmniBridge-signed JWTs for internal use. This is not OAuth and
+   not a user-facing login mechanism. It is an internal identity bootstrap
+   endpoint for services consuming OmniBridge.
+
+5. Protected Endpoint (omnibridge/api/protected_routes.py)
+
+   Endpoint: GET /protected
+
+   Requires a valid JWT. Returns the verified user_id from the token payload.
+   The endpoint contains no authentication logic — identity arrives pre-
+   verified via the dependency layer.
+
+
+TESTING STRATEGY
+
+Phase 1 was developed test-first. All authentication rules are specified
+and enforced by automated tests before implementation.
+
+  Scenario                          Expected Result
+  --------------------------------  -------------------------
+  No Authorization header           401 Unauthorized
+  Malformed Authorization header    401 Unauthorized
+  Empty Bearer token                401 Unauthorized
+  Invalid or tampered JWT           401 Unauthorized
+  Valid JWT                         200 OK, correct user_id
+
+
+--------------------------------------------------------------------------------
+ISSUES ENCOUNTERED IN PHASE 1
+--------------------------------------------------------------------------------
+
+PROBLEM 1: Import errors during testing
+
+   Cause:    Application code existed outside the installed Python package
+             boundary, making it invisible to the test runner.
+
+   Solution: Consolidated all application code under the omnibridge/ package.
+             Added explicit __init__.py files to all submodules.
+             Reinstalled package in editable mode (pip install -e .).
+
+
+PROBLEM 2: Authentication logic leaking into endpoint handlers
+
+   Cause:    Initial implementations performed auth checks directly inside
+             route functions, coupling identity concerns to business logic.
+
+   Solution: Introduced FastAPI dependency injection as the authentication
+             layer. Endpoints are now passed verified identity data only;
+             they have no visibility into the authentication mechanism.
+
+
+PROBLEM 3: Incomplete token validation
+
+   Cause:    Early auth checks only verified header presence, leaving
+             malformed and empty token cases unhandled.
+
+   Solution: Implemented the full layered pipeline described above (scheme
+             validation → token extraction → non-empty check → cryptographic
+             verification). Each layer has a corresponding test case.
+
+
+PROBLEM 4: JWT trust model ambiguity
+
+   Cause:    JWT verification involves cryptographic trust, not simple
+             string matching. The distinction was not initially explicit
+             in the implementation.
+
+   Solution: Formalized the mental model:
+
+               JWT = signed identity assertion
+               Trust derives from secret key ownership
+               The guarantee is integrity, not secrecy
+
+
+SECURITY GUARANTEES ESTABLISHED
+
+  - OmniBridge never trusts client-supplied input without verification
+  - Identity cannot be forged without possession of the signing key
+  - Authentication is stateless and horizontally scalable
+  - Protected routes execute only when identity is verified

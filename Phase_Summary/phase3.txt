@@ -1,0 +1,258 @@
+================================================================================
+OMNIBRIDGE
+Internal API Gateway — Technical Documentation
+Phase 3 — Connectors & Real Gmail Integration
+================================================================================
+
+
+--------------------------------------------------------------------------------
+OVERVIEW
+--------------------------------------------------------------------------------
+
+Phase 3 extends OmniBridge from an authentication and account management system
+into a functional data access platform. Where Phase 1 established identity and
+Phase 2 established permission storage, Phase 3 introduces the connector layer —
+the mechanism by which OmniBridge retrieves real data from external providers
+and normalizes it into a consistent internal format.
+
+This phase focuses on the Gmail connector as the first concrete implementation
+of the connector abstraction.
+
+
+--------------------------------------------------------------------------------
+OBJECTIVES
+--------------------------------------------------------------------------------
+
+By the end of Phase 3, OmniBridge must be able to:
+
+  - Connect to a third-party provider API using stored OAuth tokens
+  - Fetch real user data from an external service
+  - Normalize provider-specific responses into a unified internal schema
+  - Serve normalized data through a authenticated OmniBridge endpoint
+  - Isolate all provider-specific logic within the connector layer
+
+
+--------------------------------------------------------------------------------
+ARCHITECTURAL CONTEXT
+--------------------------------------------------------------------------------
+
+At the start of Phase 3, OmniBridge provided:
+
+  - JWT-based internal authentication (Phase 1)
+  - Secure account linking and token storage (Phase 2)
+
+Phase 3 introduces the final missing layer:
+
+  Authenticated User
+         |
+         v
+    OmniBridge API
+         |
+         v
+    Connector Layer
+         |
+         v
+  External Provider APIs  (Gmail)
+
+The connector layer is the only component with knowledge of provider-specific
+behavior. OmniBridge core logic remains provider-agnostic.
+
+
+--------------------------------------------------------------------------------
+COMPONENTS IMPLEMENTED
+--------------------------------------------------------------------------------
+
+1. Connector Abstraction
+
+   A connector is responsible for:
+
+     - Communicating with a single external provider
+     - Handling provider-specific API behavior and quirks
+     - Returning data in OmniBridge's normalized format
+
+   The abstraction enforces a strict boundary: no component above the connector
+   layer has any dependency on how a specific provider works. This isolation
+   allows new providers to be added without modifying existing logic, and
+   confines third-party API failures to a single layer.
+
+
+2. Gmail Connector  (omnibridge/connectors/gmail.py)
+
+   Responsibilities:
+
+     - Retrieve stored OAuth tokens from the token store
+     - Authenticate against the Gmail API
+     - Fetch recent messages from the user's mailbox
+     - Normalize Gmail API responses into the OmniBridge message schema
+
+   Normalized message schema:
+
+     {
+       "id":        string,
+       "source":    "gmail",
+       "from":      string,
+       "to":        [string],
+       "subject":   string,
+       "snippet":   string,
+       "timestamp": ISO-8601 string
+     }
+
+   All providers must conform to this schema. Consumers of the Sources API
+   receive this format regardless of which provider supplied the data.
+
+
+3. Sources API  (omnibridge/api/sources_routes.py)
+
+   Endpoint: GET /sources/gmail/messages
+
+   Behavior:
+
+     - Requires valid JWT (enforced via Phase 1 dependency)
+     - Retrieves the authenticated user's stored Gmail tokens
+     - Delegates to the Gmail connector for data fetching
+     - Returns normalized message results
+
+   Gmail tokens are never included in any response. The client receives only
+   normalized data; credential handling is entirely internal.
+
+
+--------------------------------------------------------------------------------
+AUTHENTICATION & TOKEN FLOW
+--------------------------------------------------------------------------------
+
+Phase 3 involves two distinct token types operating at different layers:
+
+  Token                 Purpose
+  --------------------  -----------------------------------------------
+  OmniBridge JWT        Identifies the user to OmniBridge (Phase 1)
+  Gmail access token    Authenticates OmniBridge to the Gmail API
+  Gmail refresh token   Renews the Gmail access token when expired
+
+Runtime sequence for GET /sources/gmail/messages:
+
+  1. Client presents OmniBridge JWT
+  2. Auth dependency validates JWT, extracts user_id
+  3. Gmail connector retrieves stored Gmail tokens for user_id
+  4. Connector authenticates to Gmail API using access token
+  5. Gmail API returns raw message data
+  6. Connector normalizes response to OmniBridge schema
+  7. Endpoint returns normalized data to client
+
+At no point in this sequence are Gmail tokens transmitted to the client.
+
+
+--------------------------------------------------------------------------------
+ISSUES ENCOUNTERED IN PHASE 3
+--------------------------------------------------------------------------------
+
+PROBLEM 1: Gmail API returning empty results with no errors
+
+   Symptom:  GET /sources/gmail/messages returned 200 OK with an empty array.
+             No exceptions, no indication of failure.
+
+   Cause:    Gmail API search behavior does not mirror the Gmail UI. Queries
+             that return results in the web interface may return nothing through
+             the API. The API's search is strict and does not generalize well
+             for broad queries.
+
+   Solution: Replaced search-based retrieval with a recent messages fetch.
+             Content-based filtering was deferred to higher layers where it
+             can be applied against already-retrieved data.
+
+
+PROBLEM 2: Gmail connector code not executing
+
+   Symptom:  No log output from connector code. Responses were empty despite
+             valid authentication and a correctly implemented connector.
+
+   Cause:    The Gmail connector was wired to a different endpoint than the one
+             being called. Two execution paths existed — /search and
+             /sources/gmail/messages — and the connector was attached to the
+             wrong one.
+
+   Solution: Identified the correct endpoint and verified the execution path
+             directly before integrating the connector. Connector logic was
+             tested in isolation first, then wired into the route.
+
+
+PROBLEM 3: "Google account not linked" despite successful linking
+
+   Symptom:  API returned {"detail": "Google account not linked"} on requests
+             that followed a successful POST /accounts/link.
+
+   Cause:    Multiple independent InMemoryTokenStore instances existed across
+             the application. Account linking wrote tokens to one instance;
+             the Gmail connector read from a separate instance. Because each
+             instance held its own state, the connector never found the tokens.
+
+   Solution: Introduced a single shared token store instance, centralized in
+             accounts/dependencies.py and injected consistently across all
+             components via FastAPI's dependency system.
+
+   Note:     This is a common pitfall in applications using in-memory state.
+             The fix is architectural — shared state must be injected from a
+             single source of truth, not instantiated at point of use.
+
+
+PROBLEM 4: "Invalid token" errors after server restarts
+
+   Symptom:  Valid JWTs returned {"detail": "Invalid token"} after the
+             development server was restarted.
+
+   Cause:    JWTs are signed against a secret key held in memory. Server
+             restarts reinitialize the key, invalidating all previously issued
+             tokens. In-memory token store contents are also lost on restart.
+
+   Solution: Re-issued JWTs and re-linked Gmail accounts after each restart
+             during development. Token persistence and refresh handling are
+             deferred to a later phase.
+
+
+--------------------------------------------------------------------------------
+TESTING STRATEGY
+--------------------------------------------------------------------------------
+
+Phase 3 used a hybrid testing approach reflecting the nature of external
+integrations.
+
+Unit tests:
+
+  - Gmail connector behavior verified against mocked API responses
+  - Token store correctness
+  - Authentication enforcement on Sources API endpoints
+
+Manual integration tests:
+
+  - OAuth token generation and account linking flow
+  - Real Gmail API calls with live credentials
+  - End-to-end validation of GET /sources/gmail/messages
+
+Mocked unit tests provide fast feedback during development. Manual integration
+tests validate real-world behavior that mocks cannot replicate.
+
+
+--------------------------------------------------------------------------------
+DELIBERATE DEFERRALS
+--------------------------------------------------------------------------------
+
+The following were identified but intentionally excluded from Phase 3:
+
+  - Full Gmail history indexing
+  - Background synchronization jobs
+  - Automatic OAuth token refresh
+  - Cross-provider search aggregation
+
+These remain out of scope for the current phase.
+
+
+--------------------------------------------------------------------------------
+SECURITY GUARANTEES ESTABLISHED
+--------------------------------------------------------------------------------
+
+  - Gmail OAuth tokens are never transmitted to any client
+  - Token retrieval is scoped by verified user identity from JWT
+  - Provider-specific credential handling is contained within the connector
+  - All Sources API access requires a valid OmniBridge JWT
+
+
+================================================================================
